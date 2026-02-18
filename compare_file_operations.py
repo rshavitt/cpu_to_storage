@@ -26,7 +26,7 @@ except ImportError as e:
     print("Run 'python setup.py build_ext --inplace' in compare_file_operations/ to build it")
     CPP_AVAILABLE = False
 
-VERIFY = False
+VERIFY = True
 
 
 def generate_dest_file_names(num_files):
@@ -48,6 +48,7 @@ def verify_read(block_size, block_indices, view, dest_files):
             if not verify_file(view[block_inx*block_size: (block_inx+1)*block_size], dest_files[i]):
                 print(f"Reading block {block_inx} Failed")
                 return
+    print("Verified reading blocks")
 
 def verify_write(block_size, block_indices, view, dest_files):                    
     if VERIFY:
@@ -55,6 +56,7 @@ def verify_write(block_size, block_indices, view, dest_files):
             if not verify_file(view[block_inx*block_size: (block_inx+1)*block_size], dest_files[i]):
                 print(f"Writing block {block_inx} Failed")
                 return
+    print("Verified writing blocks")
 
 
 def verify_file_cpp(original_data, filename):
@@ -759,9 +761,9 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
 
     # Test parameters
     thread_counts = [16,32,64]
-    # block_sizes_mb: list[int] = [2,4]
-    block_sizes_mb: list[int] = list(range(4,68,4))
-    block_sizes_mb.insert(0,2)
+    block_sizes_mb: list[int] = [2,4]
+    # block_sizes_mb: list[int] = list(range(4,68,4))
+    # block_sizes_mb.insert(0,2)
     # Calculate total combinations
     total_combinations = len(block_sizes_mb) * len(thread_counts)
     print(f"Testing {total_combinations} combinations ({len(block_sizes_mb)} block sizes × {len(thread_counts)} threads)")
@@ -771,7 +773,7 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
     output_file = f'results/bsc_12cpu_pok_{implementation}.json'
     
     # Check for existing results
-    existing_results: dict[Any, Any] | None = load_existing_results(output_file)
+    # existing_results: dict[Any, Any] | None = load_existing_results(output_file)
     
     # Store results - structure: results[thread_count][block_size] = time
     write_results = {}
@@ -793,25 +795,25 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
     completed_write = set()
     completed_read = set()
     
-    if existing_results and 'config' in existing_results:
-        if check_config_match(existing_results['config'], config):
-            print(f"Found existing results with matching configuration!")
-            print(f"Resuming benchmark from previous state...\n")
-            write_results = existing_results.get('write', {})
-            read_results = existing_results.get('read', {})
-            completed_write = get_completed_tests(existing_results, 'write')
-            completed_read = get_completed_tests(existing_results, 'read')
-            print(f"Already completed: {len(completed_write)} write tests, {len(completed_read)} read tests")
-        else:
-            print(f"Existing results found but configuration doesn't match.")
-            print(f"Starting fresh benchmark...\n")
-    else:
-        print(f"No existing results found. Starting fresh benchmark...\n")
+    # if existing_results and 'config' in existing_results:
+    #     if check_config_match(existing_results['config'], config):
+    #         print(f"Found existing results with matching configuration!")
+    #         print(f"Resuming benchmark from previous state...\n")
+    #         write_results = existing_results.get('write', {})
+    #         read_results = existing_results.get('read', {})
+    #         completed_write = get_completed_tests(existing_results, 'write')
+    #         completed_read = get_completed_tests(existing_results, 'read')
+    #         print(f"Already completed: {len(completed_write)} write tests, {len(completed_read)} read tests")
+    #     else:
+    #         print(f"Existing results found but configuration doesn't match.")
+    #         print(f"Starting fresh benchmark...\n")
+    # else:
+    #     print(f"No existing results found. Starting fresh benchmark...\n")
     
     # Allocate buffer once
     num_elements = buffer_size // 2
     print("Allocating buffer...")
-    buffer = torch.zeros(num_elements, dtype=torch.float16, device='cpu', pin_memory=True)
+    buffer = torch.randn(num_elements, dtype=torch.float16, device='cpu', pin_memory=True)
     print("Buffer allocated\n")
     
     # Generate file names
@@ -853,6 +855,8 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
             for i in range(iterations):
                 blocks_indices_write = random.sample(range(buffer_size // block_size), num_blocks)
                 blocks_indices_read = random.sample(range(buffer_size // block_size), num_blocks)
+                print((buffer_size // block_size), num_blocks, blocks_indices_read)
+
                 view = memoryview(buffer.numpy()).cast('B')
 
                 if implementation=="C++":
@@ -872,10 +876,10 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
                     verify_read(block_size, view, blocks_indices_read, dest_files=file_names)
 
                 elif implementation=="nixl":
-                    time_write = await nixl_write_blocks(block_size, view, blocks_indices_write, file_names, num_threads)
+                    time_write = nixl_write_blocks(block_size, buffer, blocks_indices_write, file_names)
                     verify_write(block_size, blocks_indices_write, view, file_names)
-                    time_read = await nixl_read_blocks(block_size, view, blocks_indices_read, file_names, num_threads)
-                    verify_read(block_size, view, blocks_indices_read, dest_files=file_names)                
+                    time_read = nixl_read_blocks(block_size, buffer, blocks_indices_read, file_names)
+                    verify_read(block_size,blocks_indices_read, view, dest_files=file_names)                
                 
                 elif implementation=="python_or":
                     time_write = await python_write_blocks_or(block_size, buffer, blocks_indices_write, file_names)
@@ -950,4 +954,4 @@ if __name__ == "__main__":
     # Run block size comparison with 10GB total data size
     # asyncio.run(aiofiles_block_size_comparison_total(total_gb=10, iterations=3, buffer_size=15*1024*1024*1024))
 
-    asyncio.run(block_size_comparison(num_blocks=1000, iterations=5, buffer_size=70*1024*1024*1024, implementation="python_or"))
+    asyncio.run(block_size_comparison(num_blocks=1, iterations=1, buffer_size=10*1024*1024, implementation="nixl"))
