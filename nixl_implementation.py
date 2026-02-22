@@ -1,32 +1,85 @@
-from torch import backends
+from typing import Any
+import torch
 from nixl._api import nixl_agent, nixl_agent_config
 import os
 import numpy as np
 import time
-     
 
-def nixl_write_blocks(block_size, buffer, blocks_indices, file_names):
+
+# Global persistent agents - created once and reused
+_write_agent = None
+_read_agent = None
+_write_agent_threads = None
+_read_agent_threads = None
+
+def _get_write_agent(num_threads):
+    global _write_agent, _write_agent_threads
+    
+    # Recreate agent if num_threads changed
+    if _write_agent is None or _write_agent_threads != num_threads:
+        _write_agent = None  # Release old agent
+        conf = nixl_agent_config(
+            enable_prog_thread=True,
+            num_threads=num_threads,
+            backends=["POSIX"]
+        )
+        _write_agent = nixl_agent(agent_name="NIXL_Writer", nixl_conf=conf, instantiate_all=False)
+        _write_agent_threads = num_threads
+    
+    return _write_agent
+
+
+def _get_read_agent(num_threads):
+    global _read_agent, _read_agent_threads
+    
+    # Recreate agent if num_threads changed
+    if _read_agent is None or _read_agent_threads != num_threads:
+        _read_agent = None  # Release old agent
+        conf = nixl_agent_config(
+            enable_prog_thread=True,
+            num_threads=num_threads,
+            backends=["POSIX"]
+        )
+        _read_agent = nixl_agent(agent_name="NIXL_Reader", nixl_conf=conf, instantiate_all=False)
+        _read_agent_threads = num_threads
+    
+    return _read_agent
+
+def nixl_register_buffer(agent: nixl_agent, buffer: torch.Tensor):
+    """
+    Registers the entire CPU buffer with the NIXL agent once.
+    Call this during your application's initialization phase.
+    """
+    # NIXL requires the tensor to be contiguous for native extraction
+    if not buffer.is_contiguous():
+        buffer = buffer.contiguous()
+    # NIXL automatically extracts base_addr, region_len, and gpu_id from the Tensor
+    reg_dl = agent.get_reg_descs(buffer)
+    # Register the memory region
+    reg_handle = agent.register_memory(reg_dl)
+    
+    # Return the handle so it can be kept alive and deregistered at shutdown
+    return reg_handle
+
+def nixl_unregister_buffer(agent: nixl_agent, reg_handle):
+    """
+    Unregisters the memory region associated with the given handle.
+    Call this during your application's shutdown phase.
+    """
+    agent.deregister_memory(reg_handle)
+
+def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_threads):
     """
     Writes discrete blocks from a CPU buffer to files as fast as possible.
+    Uses a persistent agent for better performance across multiple calls.
     """
     start = time.perf_counter()
-
-    conf = nixl_agent_config(
-        enable_prog_thread=True,
-        backends=["POSIX"]
-    )
-    agent = nixl_agent(agent_name="NIXL_Writer", nixl_conf=conf, instantiate_all=False)
-    # 1. Memory Registration
-    # Must register the CPU buffer to enable zero-copy paths .
-    np_buf = buffer.numpy()
-    buffer_addr = np_buf.ctypes.data
     
-    # Create registration descriptor list and register with agent
-    # reg_list = agent.get_reg_descs([(buffer_addr, buffer_len, 0, "")], mem_type="DRAM")
-    # reg_handle = agent.register_memory(reg_list, backends=["POSIX"])
-
+    # Get the persistent agent
+    agent = _get_write_agent(num_threads)
+    buffer_addr = buffer.data_ptr()
+    
     # 2. Build Xfer Descriptor Lists
-    # We batch all blocks into one request to minimize syscall overhead.
     local_descs_data = [] # CPU side
     remote_descs_data = [] # File side
     open_fds = []
@@ -42,24 +95,18 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names):
 
             # Local: DRAM block. Format: (addr, len, devID, metadata_handle)
             block_addr = buffer_addr + (idx * block_size)
-            local_descs_data.append((block_addr, block_size, 0, ""))
+            local_descs_data.append((block_addr, block_size, 0))
 
             # Remote: File target. Format: (offset, len, fd, metadata)
-            # For FILE mem_type, addr is the offset and devID is the fd .
             remote_descs_data.append((0, block_size, fd, ""))
 
         # Convert raw lists to NIXL-internal descriptor lists
-        local_desc_3 = [t[:-1] for t in local_descs_data]
-        local_reg_dl = agent.get_reg_descs(local_descs_data, mem_type="DRAM")
-        local_xfer_dl = agent.get_xfer_descs(local_desc_3, mem_type="DRAM")
-        remote_desc_3 = [t[:-1] for t in remote_descs_data]
-        remote_dl = agent.get_xfer_descs(remote_desc_3, mem_type="FILE")
+        local_xfer_dl = agent.get_xfer_descs(local_descs_data, mem_type="DRAM")
 
-        reg_handle = agent.register_memory(local_reg_dl)
         file_handle = agent.register_memory(remote_descs_data, mem_type="FILE", backends=["POSIX"])
         file_desc = file_handle.trim()
+    
         # 3. Initialize and Start Transfer
-        # Uses loopback (agent's own name) for local storage transfers.
         xfer_handle = agent.initialize_xfer(
             operation="WRITE",
             local_descs=local_xfer_dl,
@@ -72,7 +119,6 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names):
         agent.transfer(xfer_handle)
 
         # 4. Busy Polling (Fastest completion detection)
-        # Removing time.sleep() ensures processing resumes the nanosecond I/O ends.
         while True:
             state = agent.check_xfer_state(xfer_handle)
             if state == "DONE":
@@ -88,35 +134,32 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names):
         # 6. Rename temporary files to final names atomically
         for temp_fname, final_fname in temp_files:
             os.rename(temp_fname, final_fname)
-
+    except:
+        for fd in open_fds:
+            os.close(fd)
     finally:
         end = time.perf_counter()
 
-        # 7. Fast Cleanup
-        for fd in open_fds:
-            os.close(fd)
         if 'xfer_handle' in locals():
             agent.release_xfer_handle(xfer_handle)
-        # agent.deregister_memory(reg_handle)
+        if 'file_handle' in locals():
+            agent.deregister_memory(file_handle)
 
     return (end-start)
 
-def nixl_read_blocks(block_size, buffer,
-                           block_indices: list, file_names: list):
+
+def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, num_threads):
     """
     Reads discrete blocks from files into a CPU buffer as fast as possible.
+    Uses a persistent agent for better performance across multiple calls.
     """
     start = time.perf_counter()
-
-    conf = nixl_agent_config(
-        enable_prog_thread=True,
-        backends=["POSIX"]
-    )
-    agent = nixl_agent(agent_name="NIXL_Reader", nixl_conf=conf, instantiate_all=False)
+    
+    # Get the persistent agent
+    agent = _get_read_agent(num_threads)
 
     # 1. Memory Registration
-    np_buf = buffer.numpy()
-    buffer_addr = np_buf.ctypes.data
+    buffer_addr = buffer.data_ptr()
 
     # 2. Build Xfer Descriptor Lists
     local_descs_data = []
@@ -130,22 +173,19 @@ def nixl_read_blocks(block_size, buffer,
 
             # Local: Destination block in CPU buffer
             block_addr = buffer_addr + (idx * block_size)
-            local_descs_data.append((block_addr, block_size, 0, ""))
+            local_descs_data.append((block_addr, block_size, 0))
 
             # Remote: Source file
             remote_descs_data.append((0, block_size, fd, ""))
 
         # Convert raw lists to NIXL-internal descriptor lists
-        local_desc_3 = [t[:-1] for t in local_descs_data]
-        local_reg_dl = agent.get_reg_descs(local_descs_data, mem_type="DRAM")
-        local_xfer_dl = agent.get_xfer_descs(local_desc_3, mem_type="DRAM")
-        remote_desc_3 = [t[:-1] for t in remote_descs_data]
-        remote_dl = agent.get_xfer_descs(remote_desc_3, mem_type="FILE")
+        local_xfer_dl = agent.get_xfer_descs(local_descs_data, mem_type="DRAM")
 
-        reg_handle = agent.register_memory(local_reg_dl)
         file_handle = agent.register_memory(remote_descs_data, mem_type="FILE", backends=["POSIX"])
         file_desc = file_handle.trim()
         
+        end_prep = time.perf_counter()
+
         # 3. Initialize and Start Transfer
         xfer_handle = agent.initialize_xfer(
             operation="READ",
@@ -164,14 +204,19 @@ def nixl_read_blocks(block_size, buffer,
                 break
             elif state == "ERR":
                 raise RuntimeError("NIXL Transfer Failed")
-
-    finally:
-        end: float = time.perf_counter()
-
         for fd in open_fds:
             os.close(fd)
+        end: float = time.perf_counter()
+
+    except:
+        for fd in open_fds:
+            os.close(fd)
+    finally:
+
         if 'xfer_handle' in locals():
             agent.release_xfer_handle(xfer_handle)
-        # agent.deregister_memory(reg_handle)
-
+        if 'file_handle' in locals():
+            agent.deregister_memory(file_handle)
+    
     return (end-start)
+

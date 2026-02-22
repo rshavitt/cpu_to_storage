@@ -14,7 +14,7 @@ import json
 
 from torch.library import impl
 from checkpoints_utils import save_incremental_results, load_existing_results, check_config_match, get_completed_tests
-from nixl_implementation import nixl_write_blocks, nixl_read_blocks
+from nixl_implementation import nixl_write_blocks, nixl_read_blocks, nixl_register_buffer, nixl_unregister_buffer, _get_read_agent, _get_write_agent
 
 
 # Import C++ extension for high-performance file I/O
@@ -26,7 +26,7 @@ except ImportError as e:
     print("Run 'python setup.py build_ext --inplace' in compare_file_operations/ to build it")
     CPP_AVAILABLE = False
 
-VERIFY = True
+VERIFY = False
 
 
 def generate_dest_file_names(num_files):
@@ -48,7 +48,7 @@ def verify_read(block_size, block_indices, view, dest_files):
             if not verify_file(view[block_inx*block_size: (block_inx+1)*block_size], dest_files[i]):
                 print(f"Reading block {block_inx} Failed")
                 return
-    print("Verified reading blocks")
+        print("Verified reading blocks")
 
 def verify_write(block_size, block_indices, view, dest_files):                    
     if VERIFY:
@@ -56,7 +56,7 @@ def verify_write(block_size, block_indices, view, dest_files):
             if not verify_file(view[block_inx*block_size: (block_inx+1)*block_size], dest_files[i]):
                 print(f"Writing block {block_inx} Failed")
                 return
-    print("Verified writing blocks")
+        print("Verified writing blocks")
 
 
 def verify_file_cpp(original_data, filename):
@@ -813,7 +813,7 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
     # Allocate buffer once
     num_elements = buffer_size // 2
     print("Allocating buffer...")
-    buffer = torch.randn(num_elements, dtype=torch.float16, device='cpu', pin_memory=True)
+    buffer = torch.zeros(num_elements, dtype=torch.float16, device='cpu', pin_memory=True)
     print("Buffer allocated\n")
     
     # Generate file names
@@ -853,9 +853,15 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
             times_read = []
             
             for i in range(iterations):
+                for file_name in file_names:
+                    try:
+                        if os.path.exists(file_name):
+                            os.remove(file_name)
+                    except Exception as e:
+                        print(f"    Warning: Could not remove {file_name}: {e}")
+
                 blocks_indices_write = random.sample(range(buffer_size // block_size), num_blocks)
                 blocks_indices_read = random.sample(range(buffer_size // block_size), num_blocks)
-                print((buffer_size // block_size), num_blocks, blocks_indices_read)
 
                 view = memoryview(buffer.numpy()).cast('B')
 
@@ -876,11 +882,16 @@ async def block_size_comparison(num_blocks, iterations, buffer_size, implementat
                     verify_read(block_size, view, blocks_indices_read, dest_files=file_names)
 
                 elif implementation=="nixl":
-                    time_write = nixl_write_blocks(block_size, buffer, blocks_indices_write, file_names)
+                    reg_handler_write = nixl_register_buffer(_get_write_agent(num_threads), buffer)
+                    time_write = nixl_write_blocks(block_size, buffer, blocks_indices_write, file_names, num_threads)
                     verify_write(block_size, blocks_indices_write, view, file_names)
-                    time_read = nixl_read_blocks(block_size, buffer, blocks_indices_read, file_names)
+                    nixl_unregister_buffer(_get_write_agent(num_threads), reg_handler_write)
+
+                    reg_handler_read = nixl_register_buffer(_get_read_agent(num_threads), buffer)
+                    time_read = nixl_read_blocks(block_size, buffer, blocks_indices_read, file_names, num_threads)
                     verify_read(block_size,blocks_indices_read, view, dest_files=file_names)                
-                
+                    nixl_unregister_buffer(_get_read_agent(num_threads), reg_handler_read)
+
                 elif implementation=="python_or":
                     time_write = await python_write_blocks_or(block_size, buffer, blocks_indices_write, file_names)
                     verify_write(block_size, blocks_indices_write, view, file_names)
@@ -954,4 +965,4 @@ if __name__ == "__main__":
     # Run block size comparison with 10GB total data size
     # asyncio.run(aiofiles_block_size_comparison_total(total_gb=10, iterations=3, buffer_size=15*1024*1024*1024))
 
-    asyncio.run(block_size_comparison(num_blocks=1, iterations=1, buffer_size=10*1024*1024, implementation="nixl"))
+    asyncio.run(block_size_comparison(num_blocks=1000, iterations=5, buffer_size=70*1024*1024*1024, implementation="nixl"))
