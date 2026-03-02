@@ -5,44 +5,42 @@ import os
 import numpy as np
 import time
 
+# Storage path configuration - can be overridden by STORAGE_PATH environment variable
+STORAGE_PATH = os.environ.get('STORAGE_PATH', '/dev/shm')
+
 
 # Global persistent agents - created once and reused
 _write_agent = None
 _read_agent = None
-_write_agent_threads = None
-_read_agent_threads = None
 
-def _get_write_agent(num_threads):
-    global _write_agent, _write_agent_threads
+def _get_write_agent():
+    global _write_agent
     
     # Recreate agent if num_threads changed
-    if _write_agent is None or _write_agent_threads != num_threads:
+    if _write_agent is None:
         _write_agent = None  # Release old agent
         conf = nixl_agent_config(
             enable_prog_thread=True,
-            num_threads=num_threads,
-            backends=["POSIX"]
+            backends=[]
         )
         _write_agent = nixl_agent(agent_name="NIXL_Writer", nixl_conf=conf, instantiate_all=False)
-        _write_agent_threads = num_threads
-    
+        _write_agent.create_backend("POSIX", initParams={"use_uring": "true"})
     return _write_agent
 
 
-def _get_read_agent(num_threads):
-    global _read_agent, _read_agent_threads
+def _get_read_agent():
+    global _read_agent
     
     # Recreate agent if num_threads changed
-    if _read_agent is None or _read_agent_threads != num_threads:
+    if _read_agent is None:
         _read_agent = None  # Release old agent
         conf = nixl_agent_config(
             enable_prog_thread=True,
-            num_threads=num_threads,
-            backends=["POSIX"]
+            backends=[]
         )
         _read_agent = nixl_agent(agent_name="NIXL_Reader", nixl_conf=conf, instantiate_all=False)
-        _read_agent_threads = num_threads
-    
+        _read_agent.create_backend("POSIX", initParams={"use_uring": "true"})
+
     return _read_agent
 
 def nixl_register_buffer(agent: nixl_agent, buffer: torch.Tensor):
@@ -68,7 +66,7 @@ def nixl_unregister_buffer(agent: nixl_agent, reg_handle):
     """
     agent.deregister_memory(reg_handle)
 
-def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_threads):
+def nixl_write_blocks(block_size, buffer, blocks_indices, file_names):
     """
     Writes discrete blocks from a CPU buffer to files as fast as possible.
     Uses a persistent agent for better performance across multiple calls.
@@ -76,7 +74,7 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_thread
     start = time.perf_counter()
     
     # Get the persistent agent
-    agent = _get_write_agent(num_threads)
+    agent = _get_write_agent()
     buffer_addr = buffer.data_ptr()
     
     # 2. Build Xfer Descriptor Lists
@@ -87,8 +85,8 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_thread
 
     try:
         for i, (idx, fname) in enumerate(zip(blocks_indices, file_names)):
-            # Write to temporary file in /dev/shm first
-            temp_fname = f"/dev/shm/temp_block_{idx}.bin"
+            # Write to temporary file first
+            temp_fname = f"{STORAGE_PATH}/temp_block_{idx}.bin"
             temp_files.append((temp_fname, fname))
             fd = os.open(temp_fname, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
             open_fds.append(fd)
@@ -114,7 +112,6 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_thread
             remote_agent="NIXL_Writer",
             backends=["POSIX"]
         )
-        
         # Start the asynchronous data movement
         agent.transfer(xfer_handle)
 
@@ -148,7 +145,7 @@ def nixl_write_blocks(block_size, buffer, blocks_indices, file_names, num_thread
     return (end-start)
 
 
-def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, num_threads):
+def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list):
     """
     Reads discrete blocks from files into a CPU buffer as fast as possible.
     Uses a persistent agent for better performance across multiple calls.
@@ -156,7 +153,7 @@ def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, 
     start = time.perf_counter()
     
     # Get the persistent agent
-    agent = _get_read_agent(num_threads)
+    agent = _get_read_agent()
 
     # 1. Memory Registration
     buffer_addr = buffer.data_ptr()
@@ -168,7 +165,7 @@ def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, 
 
     try:
         for idx, fname in zip(block_indices, file_names):
-            fd = os.open(fname, os.O_RDONLY)
+            fd = os.open(fname, os.O_RDONLY )
             open_fds.append(fd)
 
             # Local: Destination block in CPU buffer
@@ -184,8 +181,6 @@ def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, 
         file_handle = agent.register_memory(remote_descs_data, mem_type="FILE", backends=["POSIX"])
         file_desc = file_handle.trim()
         
-        end_prep = time.perf_counter()
-
         # 3. Initialize and Start Transfer
         xfer_handle = agent.initialize_xfer(
             operation="READ",
@@ -204,15 +199,14 @@ def nixl_read_blocks(block_size, buffer, block_indices: list, file_names: list, 
                 break
             elif state == "ERR":
                 raise RuntimeError("NIXL Transfer Failed")
+
         for fd in open_fds:
             os.close(fd)
-        end: float = time.perf_counter()
-
     except:
         for fd in open_fds:
             os.close(fd)
     finally:
-
+        end = time.perf_counter()
         if 'xfer_handle' in locals():
             agent.release_xfer_handle(xfer_handle)
         if 'file_handle' in locals():

@@ -19,6 +19,13 @@ spec:
       apt-get install -y build-essential && \
       pip install ninja aiofiles nixl && \
       sleep infinity
+    env:
+    - name: STORAGE_PATH
+      value: "/mnt/persistent-storage"  # Change to "/mnt/persistent-storage" for real storage testing
+    - name: CLUSTER_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.labels['cluster']
     resources:
       requests:
         memory: "300Gi"
@@ -31,8 +38,13 @@ spec:
     volumeMounts:
     - mountPath: /dev/shm
       name: dshm
+    - mountPath: /mnt/persistent-storage
+      name: persistent-storage
   volumes:
   - name: dshm
     emptyDir:
       medium: Memory
-      sizeLimit: "200Gi" # Adjust based on 'buffer_size' variable
+      sizeLimit: "300Gi" # Adjust based on 'buffer_size' variable
+  - name: persistent-storage
+    persistentVolumeClaim:
+      claimName: io-benchmark-pvc

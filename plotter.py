@@ -400,30 +400,41 @@ def plot_block_size_heatmaps(results_file='compare_file_operations_results/block
     print("Heatmap plotting complete!")
 
 
-def plot_block_size_throughput_by_threads(results_file1='compare_file_operations/results/block_size_comparison_1000blocks.json',
-                                          results_file2=None,
-                                          results_file3=None):
+def plot_block_size_throughput_by_threads(results_files):
     """Create 6 plots (2 operations × 3 thread counts) showing throughput vs block size.
     
     Each plot shows throughput as a function of block size for a specific operation and thread count.
-    Can compare up to 3 implementations on the same plots.
+    Can compare multiple implementations on the same plots.
     Includes all metadata from the config.
     
     Args:
-        results_file1: Path to first results JSON file
-        results_file2: Optional path to second results JSON file for comparison
-        results_file3: Optional path to third results JSON file for comparison
+        results_files: List of paths to results JSON files (can be a single file or multiple files for comparison)
     """
     
-    # Load results from first JSON file
-    with open(results_file1, 'r') as f:
-        results1 = json.load(f)
+    # Ensure results_files is a list
+    if isinstance(results_files, str):
+        results_files = [results_files]
     
-    write_data1 = results1['write']
-    read_data1 = results1['read']
-    config1 = results1['config']
+    if not results_files:
+        raise ValueError("At least one results file must be provided")
     
-    # Extract configuration from first file
+    # Load all results files
+    all_results = []
+    all_write_data = []
+    all_read_data = []
+    all_implementations = []
+    
+    for results_file in results_files:
+        with open(results_file, 'r') as f:
+            results = json.load(f)
+        
+        all_results.append(results)
+        all_write_data.append(results['write'])
+        all_read_data.append(results['read'])
+        all_implementations.append(results['config'].get('implementation', 'Unknown'))
+    
+    # Extract configuration from first file (assume all have same structure)
+    config1 = all_results[0]['config']
     cluster = config1['cluster']
     thread_counts = config1['thread_counts']
     block_sizes_mb = config1['block_sizes_mb']
@@ -431,65 +442,32 @@ def plot_block_size_throughput_by_threads(results_file1='compare_file_operations
     num_iterations = config1['num_iterations']
     buffer_size_gb = config1['buffer_size'] / (1024**3)
     file_system = config1.get('file_system', 'Unknown')
-    implementation1 = config1.get('implementation', 'Unknown')
-    
-    # Initialize variables for second and third files
-    write_data2 = None
-    read_data2 = None
-    implementation2 = None
-    write_data3 = None
-    read_data3 = None
-    implementation3 = None
-    
-    # Load second file if provided
-    if results_file2:
-        with open(results_file2, 'r') as f:
-            results2 = json.load(f)
-        
-        write_data2 = results2['write']
-        read_data2 = results2['read']
-        config2 = results2['config']
-        implementation2 = config2.get('implementation', 'Unknown')
-    
-    # Load third file if provided
-    if results_file3:
-        with open(results_file3, 'r') as f:
-            results3 = json.load(f)
-        
-        write_data3 = results3['write']
-        read_data3 = results3['read']
-        config3 = results3['config']
-        implementation3 = config3.get('implementation', 'Unknown')
     
     # Create metadata text
-    if results_file3:
-        implementations = f"{implementation1} vs {implementation2} vs {implementation3}"
-    elif results_file2:
-        implementations = f"{implementation1} vs {implementation2}"
+    if len(all_implementations) > 1:
+        implementations = " vs ".join(all_implementations)
     else:
-        implementations = implementation1
+        implementations = all_implementations[0]
     
     metadata = (f"File System: {file_system} | Comparing: {implementations}\n"
                 f"Cluster: {cluster} | Buffer: {buffer_size_gb:.1f}GB | Blocks: {num_blocks} | Iterations: {num_iterations}")
     
     # Create figure with 2 rows (operations) × 3 columns (thread counts)
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    num_implementations = 1 + (1 if results_file2 else 0) + (1 if results_file3 else 0)
+    num_implementations = len(all_implementations)
     fig.suptitle(f'Throughput vs Block Size - {num_implementations} Implementation{"s" if num_implementations > 1 else ""} Comparison',
                  fontsize=16, fontweight='bold', y=0.98)
     
     # Add overall metadata below the title with more spacing
     fig.text(0.5, 0.92, metadata, ha='center', fontsize=10, style='italic', color='#555555')
     
-    # Define colors and markers for up to 3 implementations
-    colors = ['blue', 'orange', 'green']
-    markers = ['o-', 's--', '^:']
-    marker_sizes = [10, 8, 8]
+    # Define colors and markers - extend for more implementations
+    colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o-', 's--', '^:', 'D-.', 'v-', 'p--', '*:', 'h-.', '+--', 'x:']
+    marker_sizes = [10, 8, 8, 8, 8, 8, 8, 8, 8, 8]
     
-    operations = [('write', [write_data1, write_data2, write_data3], 'Write'),
-                  ('read', [read_data1, read_data2, read_data3], 'Read')]
-    
-    implementations = [implementation1, implementation2, implementation3]
+    operations = [('write', all_write_data, 'Write'),
+                  ('read', all_read_data, 'Read')]
     
     for row_idx, (op_name, op_data_list, op_label) in enumerate(operations):
         for col_idx, thread_count in enumerate(thread_counts):
@@ -497,10 +475,7 @@ def plot_block_size_throughput_by_threads(results_file1='compare_file_operations
             thread_key = str(thread_count)
             
             # Plot each implementation
-            for impl_idx, (op_data, impl_name) in enumerate(zip(op_data_list, implementations)):
-                if op_data is None:
-                    continue
-                
+            for impl_idx, (op_data, impl_name) in enumerate(zip(op_data_list, all_implementations)):
                 # Collect data for this implementation
                 throughputs = []
                 block_sizes_for_plot = []
@@ -517,19 +492,22 @@ def plot_block_size_throughput_by_threads(results_file1='compare_file_operations
                         block_sizes_for_plot.append(bs_mb)
                 
                 # Plot this implementation
-                ax.plot(block_sizes_for_plot, throughputs, markers[impl_idx], color=colors[impl_idx],
-                       linewidth=2.5, markersize=marker_sizes[impl_idx], markeredgewidth=1.5,
+                color_idx = impl_idx % len(colors)
+                marker_idx = impl_idx % len(markers)
+                ax.plot(block_sizes_for_plot, throughputs, markers[marker_idx], color=colors[color_idx],
+                       linewidth=2.5, markersize=marker_sizes[marker_idx], markeredgewidth=1.5,
                        markeredgecolor='white', label=impl_name)
                 
                 # Add value labels on points
-                y_offset = 8 if impl_idx == 0 else (-12 if impl_idx == 1 else 0)
-                x_offset = 0 if impl_idx != 2 else 10
+                # Stagger labels vertically for multiple implementations
+                y_offset = 8 + (impl_idx % 3) * (-10)
+                x_offset = (impl_idx // 3) * 10
                 for bs, tp in zip(block_sizes_for_plot, throughputs):
                     ax.annotate(f'{tp:.2f}', xy=(bs, tp),
                                xytext=(x_offset, y_offset), textcoords='offset points',
                                ha='center', fontsize=7, fontweight='bold',
                                bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                                       edgecolor=colors[impl_idx], alpha=0.7))
+                                       edgecolor=colors[color_idx], alpha=0.7))
             
             # Formatting
             ax.set_xlabel('Block Size (MB)', fontsize=11, fontweight='bold')
@@ -538,14 +516,15 @@ def plot_block_size_throughput_by_threads(results_file1='compare_file_operations
                         fontsize=12, fontweight='bold', pad=10)
             ax.grid(True, alpha=0.3, linestyle='--')
             # Use linear scale for x-axis
-            ax.set_xticks(block_sizes_for_plot)
-            ax.set_xticklabels([str(bs) for bs in block_sizes_for_plot])
+            if block_sizes_mb:  # Only set ticks if we have data
+                ax.set_xticks(block_sizes_mb)
+                ax.set_xticklabels([str(bs) for bs in block_sizes_mb])
             
             # Set y-axis to start from 0 for better comparison
             ax.set_ylim(bottom=0)
             
             # Add legend
-            ax.legend(loc='upper left', fontsize=9)
+            ax.legend(loc='lower right', fontsize=9)
     
     plt.tight_layout(rect=(0, 0.02, 1, 0.94))
     
@@ -554,19 +533,179 @@ def plot_block_size_throughput_by_threads(results_file1='compare_file_operations
     os.makedirs('plots', exist_ok=True)
     
     # Create output filename based on number of files
-    base_name = os.path.basename(results_file1).replace('.json', '')
-    if results_file3:
-        output_png = f'plots/{base_name}_3way_comparison_throughput_plots.png'
-    elif results_file2:
+    base_name = os.path.basename(results_files[0]).replace('.json', '')
+    if len(results_files) > 2:
+        output_png = f'plots/{base_name}_{len(results_files)}way_comparison_throughput_plots.png'
+    elif len(results_files) == 2:
         output_png = f'plots/{base_name}_vs_comparison_throughput_plots.png'
     else:
-        output_png = f'plots/{base_name}_throughput_plots_2.png'
+        output_png = f'plots/{base_name}_throughput_plots.png'
     
     plt.savefig(output_png, dpi=300, bbox_inches='tight')
     print(f"\nThroughput plots saved to {output_png}")
     plt.close()
     
     print("Throughput plotting complete!")
+
+
+def plot_total_data_throughput_by_threads(results_files):
+    """Create 6 plots (2 operations x 3 thread counts) showing throughput vs block size,
+    where total data size is constant and block count varies with block size.
+
+    Each plot shows throughput as a function of block size for a specific operation and thread count.
+    Can compare multiple implementations on the same plots.
+    Includes all metadata from the config.
+
+    Args:
+        results_files: List of paths to results JSON files produced by block_size_comparison_total
+                       (can be a single file or multiple files for comparison)
+    """
+
+    # Ensure results_files is a list
+    if isinstance(results_files, str):
+        results_files = [results_files]
+
+    if not results_files:
+        raise ValueError("At least one results file must be provided")
+
+    # Load all results files
+    all_results = []
+    all_write_data = []
+    all_read_data = []
+    all_implementations = []
+
+    for results_file in results_files:
+        with open(results_file, 'r') as f:
+            results = json.load(f)
+
+        all_results.append(results)
+        all_write_data.append(results['write'])
+        all_read_data.append(results['read'])
+        all_implementations.append(results['config'].get('implementation', 'Unknown'))
+
+    # Extract configuration from first file (assume all have same structure)
+    config1 = all_results[0]['config']
+    cluster = config1.get('cluster', 'Unknown')
+    thread_counts = config1['thread_counts']
+    block_sizes_mb = config1['block_sizes_mb']
+    total_data_gb = config1['total_data_size_gb']
+    num_iterations = config1['num_iterations']
+    buffer_size_gb = config1['buffer_size'] / (1024 ** 3)
+    file_system = config1.get('file_system', 'Unknown')
+
+    # Create metadata text
+    if len(all_implementations) > 1:
+        implementations = " vs ".join(all_implementations)
+    else:
+        implementations = all_implementations[0]
+
+    metadata = (f"File System: {file_system} | Comparing: {implementations}\n"
+                f"Cluster: {cluster} | Buffer: {buffer_size_gb:.1f}GB | "
+                f"Total Data (fixed): {total_data_gb}GB | Iterations: {num_iterations}")
+
+    # Create figure with 2 rows (operations) x 3 columns (thread counts)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    num_implementations = len(all_implementations)
+    fig.suptitle(
+        f'Throughput vs Block Size (Fixed Total Data) - '
+        f'{num_implementations} Implementation{"s" if num_implementations > 1 else ""} Comparison',
+        fontsize=16, fontweight='bold', y=0.98)
+
+    # Add overall metadata below the title
+    fig.text(0.5, 0.92, metadata, ha='center', fontsize=10, style='italic', color='#555555')
+
+    # Define colors and markers
+    colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o-', 's--', '^:', 'D-.', 'v-', 'p--', '*:', 'h-.', '+--', 'x:']
+    marker_sizes = [10, 8, 8, 8, 8, 8, 8, 8, 8, 8]
+
+    operations = [('write', all_write_data, 'Write'),
+                  ('read', all_read_data, 'Read')]
+
+    for row_idx, (op_name, op_data_list, op_label) in enumerate(operations):
+        for col_idx, thread_count in enumerate(thread_counts):
+            ax = axes[row_idx, col_idx]
+            thread_key = str(thread_count)
+
+            # Plot each implementation
+            for impl_idx, (op_data, impl_name) in enumerate(zip(op_data_list, all_implementations)):
+                throughputs = []
+                block_sizes_for_plot = []
+
+                for bs_mb in block_sizes_mb:
+                    bs_key = str(bs_mb)
+                    # Structure: op_data[thread_count][block_size_mb] = avg_time_seconds
+                    if thread_key in op_data and bs_key in op_data[thread_key]:
+                        avg_time = op_data[thread_key][bs_key]
+                        # Total data is fixed; throughput = total_data_gb / avg_time_seconds
+                        throughput = total_data_gb / avg_time
+                        throughputs.append(throughput)
+                        block_sizes_for_plot.append(bs_mb)
+
+                # Plot this implementation
+                color_idx = impl_idx % len(colors)
+                marker_idx = impl_idx % len(markers)
+                ax.plot(block_sizes_for_plot, throughputs, markers[marker_idx],
+                        color=colors[color_idx],
+                        linewidth=2.5, markersize=marker_sizes[marker_idx],
+                        markeredgewidth=1.5, markeredgecolor='white', label=impl_name)
+
+                # Add value labels on points (stagger vertically for multiple implementations)
+                y_offset = 8 + (impl_idx % 3) * (-10)
+                x_offset = (impl_idx // 3) * 10
+                for bs, tp in zip(block_sizes_for_plot, throughputs):
+                    ax.annotate(f'{tp:.2f}', xy=(bs, tp),
+                                xytext=(x_offset, y_offset), textcoords='offset points',
+                                ha='center', fontsize=7, fontweight='bold',
+                                bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                                          edgecolor=colors[color_idx], alpha=0.7))
+
+            # Add a secondary x-axis showing number of blocks for each block size
+            ax2 = ax.twiny()
+            ax2.set_xlim(ax.get_xlim())
+            ax2.set_xticks(block_sizes_mb)
+            ax2.set_xticklabels(
+                [f'{int((total_data_gb * 1024) / bs)}' for bs in block_sizes_mb],
+                fontsize=7, rotation=45, ha='left')
+            ax2.set_xlabel('# Blocks', fontsize=8, color='gray')
+            ax2.tick_params(axis='x', colors='gray')
+
+            # Formatting
+            ax.set_xlabel('Block Size (MB)', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Throughput (GB/s)', fontsize=11, fontweight='bold')
+            ax.set_title(f'{op_label} - {thread_count} Threads',
+                         fontsize=12, fontweight='bold', pad=20)
+            ax.grid(True, alpha=0.3, linestyle='--')
+            if block_sizes_mb:
+                ax.set_xticks(block_sizes_mb)
+                ax.set_xticklabels([str(bs) for bs in block_sizes_mb])
+
+            # Set y-axis to start from 0 for better comparison
+            ax.set_ylim(bottom=0)
+
+            # Add legend
+            ax.legend(loc='lower right', fontsize=9)
+
+    plt.tight_layout(rect=(0, 0.02, 1, 0.94))
+
+    # Save figure to plots directory
+    import os
+    os.makedirs('plots', exist_ok=True)
+
+    # Create output filename based on number of files
+    base_name = os.path.basename(results_files[0]).replace('.json', '')
+    if len(results_files) > 2:
+        output_png = f'plots/{base_name}_{len(results_files)}way_total_throughput_plots.png'
+    elif len(results_files) == 2:
+        output_png = f'plots/{base_name}_vs_total_throughput_plots.png'
+    else:
+        output_png = f'plots/{base_name}_total_throughput_plots.png'
+
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    print(f"\nTotal-data throughput plots saved to {output_png}")
+    plt.close()
+
+    print("Total-data throughput plotting complete!")
 
 
 if __name__ == "__main__":
@@ -579,10 +718,17 @@ if __name__ == "__main__":
     # plot_block_size_heatmaps(results_file)
     
     # Generate throughput vs block size plots for 1000 blocks test
-    results_file_python = './results/12feb/bsc_12cpu_pok_python_self_implementation.json'
-    results_file_aiofiles = './results/12feb/bsc_12cpu_pok_python_aiofiles.json'
+    results_file_python = './results/storage_5000blocks/storage_python_self_implementation.json'
+    results_file_aiofiles = './results/storage_5000blocks/storage_2_python_aiofiles.json'
+    results_file_nixl = './results/storage_5000blocks/storage_2_nixl.json'
+    results_file_or = './results/storage_5000blocks/storage_2_python_or.json'
+    results_file_cpp = './results/storage_5000blocks/storage_2_C++.json'
+    results_file_best = './results/storage_5000blocks/storage_2_python_best.json'
+    total_cpp = './results/total_100gb/total_100gb_memory_C++.json'
+    total_python = './results/total_100gb/total_100gb_memory_python_best.json'
 
-    results_file_or = './results/12feb/bsc_12cpu_pok_python_or_2.json'
-    results_file_cpp = './results/12feb/bsc_12cpu_pok_C++.json'
+    # Now accepts a list of results files
+    # plot_block_size_throughput_by_threads(results_files=[results_file_cpp, results_file_best, results_file_nixl, results_file_aiofiles])
+    # plot_block_size_throughput_by_threads([results_file_best,results_file_or,results_file_python])
 
-    plot_block_size_throughput_by_threads(results_file_or, results_file_cpp,)
+    plot_total_data_throughput_by_threads([total_cpp,total_python])
