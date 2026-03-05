@@ -56,7 +56,7 @@ python compare_file_operations.py
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--mode` | str | `blocks` | Benchmark mode: `block` for testing on a fixed number of blocks or `data` for testing a fixed data size |
-| `--backend` | str | `python_self_implementation` | Backends: `cpp`, `python_aiofiles`, `python_self_implementation`, `nixl` |
+| `--backend` | str | `python_self_imp` | Backends: `cpp`, `python_aiofiles`, `python_self_imp`, `nixl` |
 | `--buffer-size` | int | `100` | Buffer size in GB |
 | `--block-sizes` | int list | `2 4 8 16 32 64` | Block sizes in MB to test.  |
 | `--iterations` | int | `5` | Number of iterations per test |
@@ -121,20 +121,21 @@ python setup.py build_ext --inplace
 
 Run the three tests:
 ```bash
+python compare_file_operations.py --mode data --backend python_self_imp --test-name example
 python compare_file_operations.py --mode data --backend cpp --test-name example
 python compare_file_operations.py --mode data --backend nixl --test-name example
-python compare_file_operations.py --mode data --test-name example
-
 ```
+Each test will create a json file in `./results/` directory (backend and test mode will be included in the result's file name).
 
 Copy the results back to local machine:
 ```bash
-export STORAGE_PATH=/dev/shm
+./copy_to_pod.sh --get-results
 ```
 
 Plot the results:
 ```bash
-python plotter.py data results/data_example_100gb_memory_cpp.json results/data_example_100gb_memory_python_self_implementation.json results/data_example_100gb_memory_nixl.json
+python plotter.py data results/data_example_100gb_memory_cpp.json results/data_example_100gb_memory_python_self_imp.json results/data_example_100gb_memory_nixl.json
+```
 
 This will generate a comparison plot showing throughput vs block size for all three implementations:
 
