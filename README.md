@@ -55,7 +55,7 @@ python compare_file_operations.py
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--mode` | str | `blocks` | Benchmark mode: `block` (fixed blocks) or `data` (fixed data size) |
+| `--mode` | str | `blocks` | Benchmark mode: `block` for testing on a fixed number of blocks or `data` for testing a fixed data size |
 | `--backend` | str | `python_self_implementation` | Backends: `cpp`, `python_aiofiles`, `python_self_implementation`, `nixl` |
 | `--buffer-size` | int | `100` | Buffer size in GB |
 | `--block-sizes` | int list | `2 4 8 16 32 64` | Block sizes in MB to test.  |
@@ -65,6 +65,14 @@ python compare_file_operations.py
 | `--test-name` | str | `""` | Add to results' file name |
 | `--verify` | flag | `False` | Verify file contents after write/read operations |
 
+### Checkpoints and Resumption
+
+The benchmark system includes automatic checkpoint functionality that allows you to resume interrupted benchmarks:
+
+- **Automatic Saving**: Results are saved incrementally after each test combination (thread count × block size) completes.
+- **Resume on Restart**: If a benchmark is interrupted, simply run the same command again - it will automatically detect existing results and skip completed tests.
+- **Configuration Validation**: The system verifies that the configuration matches before resuming (buffer size, iterations, block sizes, etc.)
+- **Atomic Writes**: Results are written atomically to prevent corruption if the process is killed during a save
 
 ### Environment Variables
 

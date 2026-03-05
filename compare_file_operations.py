@@ -17,7 +17,7 @@ from backends.cpp_backend import cpp_write_blocks, cpp_read_blocks, set_thread_c
 # Storage path configuration - can be overridden by STORAGE_PATH environment variable
 STORAGE_PATH = os.environ.get('STORAGE_PATH', '/dev/shm')
 CLUSTER = os.environ.get('CLUSTER_NAME', 'unknown')
-
+PYTHON_BACKENDS = ["python_aiofiles", "python_self_implementation", "nixl"]
 
 def generate_dest_file_names(num_files):
     return [f"{STORAGE_PATH}/final_{j}.bin" for j in range(num_files)]
@@ -76,15 +76,11 @@ async def blocks_benchmark(num_blocks, iterations, buffer_size, implementation, 
     """
     start_time = time.perf_counter()
 
-    python_backends = ["python_aiofiles", "python_self_implementation", "nixl"]
     if implementation=="cpp":
         if not CPP_AVAILABLE:
             print("cpp implementation not available.")
             return
-    elif implementation not in python_backends:
-        print("Invalid implementation specified.")
-        return
-    
+
     diff = block_sizes_mb[-1]*num_blocks - buffer_size/(1024*1024)
     if diff>0:
         print(f"Buffer is not large enugh, missing {diff} mb")
@@ -234,7 +230,7 @@ async def blocks_benchmark(num_blocks, iterations, buffer_size, implementation, 
             print(f"    Results saved to {output_file}")
         
         # Shutdown executor
-        if implementation in python_implementations:
+        if implementation in PYTHON_BACKENDS:
             executor.shutdown(wait=True)
             
     # Final save with complete results
@@ -424,7 +420,7 @@ async def total_data_benchmark(total_gb, iterations, buffer_size, implementation
             save_incremental_results(output_file, current_results)
             print(f"    Results saved to {output_file}")
         
-        if implementation in python_implementations:
+        if implementation in PYTHON_BACKENDS:
             executor.shutdown(wait=True)
     
     # Final save with complete results
