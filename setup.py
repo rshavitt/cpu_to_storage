@@ -38,8 +38,10 @@ extra_compile_args = {
     ]
 }
 
-# Linker flags
-extra_link_args = []
+# Linker flags — embed rpath so the .so finds libc10/libtorch at runtime
+import torch
+torch_lib_dir = os.path.join(os.path.dirname(torch.__file__), 'lib')
+extra_link_args = [f'-Wl,-rpath,{torch_lib_dir}']
 
 # Define the extension module
 ext_modules = [
