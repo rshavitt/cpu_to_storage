@@ -12,6 +12,7 @@ from utils.benchmark_core import (
     run_concurrent_benchmark_iteration, setup_cleaning_files
 )
 from backends.cpp_backend import CPP_AVAILABLE
+from utils.checkpoints_utils import save_incremental_results
 
 async def blocks_benchmark(num_blocks, iterations, buffer_size, implementation, test_name, block_sizes_mb, threads_counts, verify=False):
     start_time = time.perf_counter()
@@ -358,7 +359,6 @@ async def concurrent_benchmark(total_gb, iterations, buffer_size, implementation
         'read': read_results,
         'concurrent': concurrent_results
     }
-    from checkpoints_utils import save_incremental_results
     save_incremental_results(output_file, all_results)
     
     total_time = time.perf_counter() - start_time

@@ -21,7 +21,6 @@ cpp_utils_dir = os.path.join(current_dir, 'backends', 'benchmark_cpp_utils')
 # Source files for the extension
 sources = [
     os.path.join(cpp_utils_dir, 'cpp_utils.cpp'),
-    os.path.join(cpp_utils_dir, 'file_io.cpp'),
     os.path.join(cpp_utils_dir, 'simple_thread_pool.cpp'),
 ]
 

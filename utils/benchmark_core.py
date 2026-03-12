@@ -2,7 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from checkpoints_utils import save_incremental_results, load_existing_results, check_config_match, get_completed_tests
+from utils.checkpoints_utils import save_incremental_results, load_existing_results, check_config_match, get_completed_tests
 from backends.cpp_backend import set_thread_count_cpp
 from utils.config import PYTHON_BACKENDS, CLUSTER, STORAGE_PATH
 import torch
